@@ -1,10 +1,8 @@
 # IMPORTS
 import numpy as np
 import os
-import torch
-from torch import nn
-from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
+from model import *
 
 # VARIABLES
 device = torch.device('cuda:0')
@@ -16,6 +14,17 @@ TRAIN_RATIO = 0.9
 
 # LOAD FEATURES
 def get_features(features_dir, num_segments, num_images, num_features):
+    """
+    Load data from features_dir and processes them for training.
+    :param features_dir ... directory with precomputed features
+    :param num_segments ... number of superpixels
+    :param num_images ... number of images
+    :param num_features ... number of features (mean, std, histogram bins)
+    :return: X ... matrix of all features for all images
+    :return: y ... vector of labels
+    :return: weights ... vector of adjusted weights for training
+    """
+
     X = np.zeros([num_images, num_segments, num_features])
     y = np.zeros([num_images, num_segments])
     num = 0
@@ -48,7 +57,7 @@ def get_features(features_dir, num_segments, num_images, num_features):
     y = y[good]
 
     # exclude background
-    foreground = np.where(X[:, 1] > 1.)[0]
+    foreground = np.where(X[:, 1] > 10.)[0]
     X = X[foreground, :]
     y = y[foreground]
 
@@ -79,6 +88,14 @@ def get_features(features_dir, num_segments, num_images, num_features):
 
 
 def training(X, y, weights):
+    """
+    Train the classifier
+    :param X: matrix of all features of all images
+    :param y: vector of labels
+    :param weights: vector of adjusted weights
+    :return: model ... trained model
+    """
+
     loss_values = []
     model = NeuralNetwork()
     optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
@@ -110,9 +127,20 @@ def training(X, y, weights):
     plt.plot(loss_values)
     plt.xlabel('epoch')
     plt.ylabel('loss value')
+    plt.show()
 
+    return model
 
 def evaluation(model, X, y):
+    """
+    Evaluate the model
+    :param model: trained model
+    :param X: matrix of all features of all images
+    :param y: vector of labels
+    :return: found_tumors ... percentage of found tumors
+    :return: mislabeled_nontumors ... percentage of false positives
+    """
+
     model.eval()
     with torch.no_grad():
         outputs = model(torch.from_numpy(X.astype(np.float32))).squeeze()
@@ -130,27 +158,36 @@ def evaluation(model, X, y):
     accuracy = correct / total
 
     found_tumors = correct_pos / len(pos)
-    misslab_nontumors = 1 - (correct_neg / len(neg))
+    mislabeled_nontumors = 1 - (correct_neg / len(neg))
 
     # display statistics
     print(f"true labels: 1/all: {np.sum(y == 1) / y.shape[0]}")
     print(f"positive predictions: {np.sum(predictions != 0)}")
     print(f'Accuracy: {accuracy}')
     print(f'Found tumors (%): {found_tumors}')
-    print(f'Misslabeled non-tumors (%): {misslab_nontumors}')
+    print(f'Misslabeled non-tumors (%): {mislabeled_nontumors}')
     print(f"len(pos): {len(pos)}")
     print(f"len(neg): {len(neg)}")
     print()
 
-    return found_tumors, misslab_nontumors
+    return found_tumors, mislabeled_nontumors
 
 
 def cross_val(X, y, weights):
+    """
+    Performs cross validation
+    :param X: matrix of all features of all images
+    :param y: labels
+    :param weights: adjusted weights
+    :return: found_tumors ... percentage of found tumors
+    :return: mislab_nontumors ... percentage of false positives
+    :return: model ... trained model
+    """
     found_tumors = np.zeros(FOLDS,)
     mislab_nontumors = np.zeros(FOLDS,)
 
     for fold in range(FOLDS):
-        print("\nfold", fold+1)
+        print("\nCross-validation ", fold+1)
 
         # Split the data
         indices = np.array(range(X.shape[0]))
@@ -163,14 +200,14 @@ def cross_val(X, y, weights):
         y_train = y[train_idx]
         weights_train = weights[train_idx]
 
-        loss = training(X_train, y_train, weights_train)
+        model = training(X_train, y_train, weights_train)
 
         # Validation
         X_val = X[val_idx, :]
         y_val = y[val_idx]
 
-        found_tumors[fold], mislab_nontumors[fold] = evaluation(X_val, y_val, weights)
+        found_tumors[fold], mislab_nontumors[fold] = evaluation(model, X_val, y_val)
 
-    return found_tumors, mislab_nontumors
+    return found_tumors, mislab_nontumors, model
 
 
