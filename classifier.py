@@ -3,116 +3,174 @@ import numpy as np
 import os
 import torch
 from torch import nn
-from torch.utils.data import Dataset, DataLoader
-#import pytorch_lightning as pl
+from torch.utils.data import Dataset
+import matplotlib.pyplot as plt
 
-# TODO remove
-DATA_DIR = 'C:/Users/kajin/Documents/_/3/ZMO/sm/archiven/'
-RESULTS_TRAIN_DIR = DATA_DIR+'Results/Results_Training/'
-NUM_SEGMENTS = 500
-NUM_IMAGES = 369
-NUM_FEATURES = 3
+# VARIABLES
+device = torch.device('cuda:0')
+NUM_EPOCHS = 400
+LEARNING_RATE = 1e-3
+FOLDS = 10
+TRAIN_RATIO = 0.9
+
 
 # LOAD FEATURES
-
-
-def get_features(features_dir, num_segments, nbins):
-    X = np.zeros([NUM_IMAGES, num_segments, NUM_FEATURES, nbins])
-    y = np.zeros([NUM_IMAGES, num_segments])
+def get_features(features_dir, num_segments, num_images, num_features):
+    X = np.zeros([num_images, num_segments, num_features])
+    y = np.zeros([num_images, num_segments])
     num = 0
     i = 0
     for file in os.listdir(features_dir):
-        if 'means' in file:
-            X[num, :, 0, 0] = np.load((features_dir+file), allow_pickle=True)
+        if 'means_b' in file:
+            X[num, :, 0] = np.load((features_dir + file), allow_pickle=True)
             i += 1
-        elif 'stds' in file:
-            X[num, :, 1, 0] = np.load((features_dir+file), allow_pickle=True)
+        elif 'stds_b' in file:
+            X[num, :, 1] = np.load((features_dir + file), allow_pickle=True)
             i += 1
-        elif 'histograms' in file:
-            X[num, :, 3, :] = np.load((features_dir+file), allow_pickle=True)
+        elif 'histograms_b' in file:
+            X[num, :, 2:num_features] = np.transpose(
+                np.load((features_dir + file), allow_pickle=True))  # TODO transpose check
             i += 1
-        elif 'labels' in file:
-            y[num, :] = np.squeeze(np.load((features_dir+file)))
+        elif 'labels_b' in file:
+            y[num, :] = np.squeeze(np.load((features_dir + file)))
             i += 1
 
-        if i == 3:
+        if i == 4:
             num += 1
             i = 0
 
-    X = X.reshape((NUM_IMAGES * num_segments, NUM_FEATURES))
-    y = y.reshape((NUM_IMAGES * num_segments,))
+    X = X.reshape((num_images * num_segments, num_features))
+    y = y.reshape((num_images * num_segments,))
 
-    good = np.where(y != 0.5)
-    X = X[good, :][0, :, :]
+    # exclude mixed superpixels
+    good = np.where(y != 0.5)[0]
+    X = X[good, :]
     y = y[good]
 
-    return X, y
+    # exclude background
+    foreground = np.where(X[:, 1] > 1.)[0]
+    X = X[foreground, :]
+    y = y[foreground]
+
+    # TODO remove
+    # random shuffle data
+    r = np.array(range(X.shape[0]))
+    np.random.shuffle(r)
+    X = X[r, :]
+    y = y[r]
+
+    # select smaller dataset
+    size = X.shape[0]
+    X = X[:size, :]
+    y = y[:size]
+
+    # print
+    pos = np.where(y == 1)[0]
+    neg = np.where(y == 0)[0]
+
+    # calculate weights
+    w_pos = (1. / len(pos)) * (size / 2)
+    w_neg = (1. / len(neg)) * (size / 2)
+    weights = np.empty(size)
+    weights[pos] = w_pos
+    weights[neg] = w_neg
+
+    return X, y, weights
 
 
-class Data(Dataset):
-    def __init__(self, X, y):
-        assert X.shape[0] == y.shape[0]
-        self.len = X.shape[0]
-        self.X = torch.from_numpy(X.astype(np.float32))
-        self.y = torch.from_numpy(y.astype(np.float32))
+def training(X, y, weights):
+    loss_values = []
+    model = NeuralNetwork()
+    optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE)
 
-    def __getitem__(self, index):
-        return self.X[index, :], self.y[index]
+    # data to tensors
+    X_tens = torch.from_numpy(X.astype(np.float32))
+    y_tens = torch.from_numpy(y.astype(np.float32))
+    weights_tens = torch.from_numpy(weights.astype(np.float32))
 
-    def __len__(self):
-        return self.len
+    # send to GPU
+    model.to(device)
+    X_gpu, y_gpu, weights_gpu = X_tens.to(device), y_tens.to(device), weights_tens.to(device)
 
-# # TODO remove
-# X, y = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS)
-# print(X.dtype)
-# print(np.shape(X))
-
-# CLASSIFICATION
-class NeuralNetwork(nn.Module):
-    def __init__(self):
-        super(NeuralNetwork, self).__init__()
-        hidden_dim = 10
-
-        self.lin1 = nn.Linear(NUM_FEATURES, hidden_dim)
-        self.lin2 = nn.Linear(hidden_dim, 1)
-
-    def forward(self, x):
-        x = self.lin1(x)
-        x = torch.nn.functional.relu(x)
-        x = self.lin2(x)
-        x = torch.nn.functional.sigmoid(x)
-        return x
-
-
-model = NeuralNetwork()
-
-learning_rate = 0.1
-loss_fn = nn.BCELoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate)
-
-num_epochs = 100  #TODO
-batch_size = 1000
-loss_values = []
-
-X, y = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS)
-train_data = Data(X, y)
-train_dataloader = DataLoader(dataset=train_data, batch_size=batch_size, shuffle=True)
-
-for epoch in range(num_epochs):
-    print("epoch ", epoch)
-    for X, y in train_dataloader:
-        # zero the parameter gradients
-        optimizer.zero_grad()
-
-        # forward + backward + optimize
-        pred = model(X)
-        loss = loss_fn(pred, y.unsqueeze(-1))
+    # training
+    for epoch in range(NUM_EPOCHS):
+        #print("epoch ", epoch)
+        pred = model(X_gpu).squeeze()
+        loss = nn.BCELoss(weight=weights_gpu)(pred, y_gpu)
         loss_values.append(loss.item())
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-print("Training Complete")
+    # send to CPU
+    model.to('cpu')
+    print("Training Completed")
 
-"""
-Training Complete
-"""
+    # plot loss
+    plt.plot(loss_values)
+    plt.xlabel('epoch')
+    plt.ylabel('loss value')
+
+
+def evaluation(model, X, y):
+    model.eval()
+    with torch.no_grad():
+        outputs = model(torch.from_numpy(X.astype(np.float32))).squeeze()
+        outputs = np.array(outputs)
+
+    # count statistics
+    predictions = np.where(outputs < 0.5, 0, 1)
+    pos = np.where(y == 1)[0]
+    neg = np.where(y == 0)[0]
+    correct_pos = np.sum(predictions[pos] == y[pos])
+    correct_neg = np.sum(predictions[neg] == y[neg])
+
+    total = y.shape[0]
+    correct = np.sum(predictions == y)
+    accuracy = correct / total
+
+    found_tumors = correct_pos / len(pos)
+    misslab_nontumors = 1 - (correct_neg / len(neg))
+
+    # display statistics
+    print(f"true labels: 1/all: {np.sum(y == 1) / y.shape[0]}")
+    print(f"positive predictions: {np.sum(predictions != 0)}")
+    print(f'Accuracy: {accuracy}')
+    print(f'Found tumors (%): {found_tumors}')
+    print(f'Misslabeled non-tumors (%): {misslab_nontumors}')
+    print(f"len(pos): {len(pos)}")
+    print(f"len(neg): {len(neg)}")
+    print()
+
+    return found_tumors, misslab_nontumors
+
+
+def cross_val(X, y, weights):
+    found_tumors = np.zeros(FOLDS,)
+    mislab_nontumors = np.zeros(FOLDS,)
+
+    for fold in range(FOLDS):
+        print("\nfold", fold+1)
+
+        # Split the data
+        indices = np.array(range(X.shape[0]))
+        np.random.shuffle(indices)
+        cutoff = int(TRAIN_RATIO * len(indices))
+        train_idx, val_idx = indices[:cutoff], indices[cutoff:]
+
+        # Training
+        X_train = X[train_idx, :]
+        y_train = y[train_idx]
+        weights_train = weights[train_idx]
+
+        loss = training(X_train, y_train, weights_train)
+
+        # Validation
+        X_val = X[val_idx, :]
+        y_val = y[val_idx]
+
+        found_tumors[fold], mislab_nontumors[fold] = evaluation(X_val, y_val, weights)
+
+    return found_tumors, mislab_nontumors
+
+
