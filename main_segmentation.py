@@ -1,14 +1,13 @@
 # IMPORTS
 from preprocessing import *
 from classifier import *
+from display_results import *
 import matplotlib.pyplot as plt
 
 # SET DIRECTORIES
-DATA_DIR = 'C:/Users/kajin/Documents/_/3/ZMO/sm/archiven/'
-TRAIN_DIR = DATA_DIR+'BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/'
-VALID_DIR = DATA_DIR+'BraTS2020_ValidationData/MICCAI_BraTS2020_ValidationData/'
+DATA_DIR = 'S:/kaja/ZMO/'
+TRAIN_DIR = DATA_DIR+'git_repo/archive/BraTS2020_TrainingData/MICCAI_BraTS2020_TrainingData/'
 RESULTS_TRAIN_DIR = DATA_DIR+'Results/Results_Training/'
-RESULTS_VALID_DIR = DATA_DIR+'Results/Results_Validation/'
 
 # GLOBAL VARIABLES
 SLICE = 95  # slice to display superpixels on
@@ -50,57 +49,12 @@ def preprocess(in_dir, out_dir):
             np.save(os.path.join(out_dir, dir+'_labels_'+VERSION), labels)
 
 
-preprocess(TRAIN_DIR, RESULTS_TRAIN_DIR)
 
+if __name__ == '__main__':
+    #preprocess(TRAIN_DIR, RESULTS_TRAIN_DIR)
 
-# CLASSIFIER
-class Data(Dataset):
-    def __init__(self, X, y, weights):
-        assert X.shape[0] == y.shape[0] == len(weights)
-        self.len = X.shape[0]
-        self.X = torch.from_numpy(X.astype(np.float32))
-        self.y = torch.from_numpy(y.astype(np.float32))
-        self.weights = torch.from_numpy(weights.astype(np.float32))
+    X, y, weights = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS, NUM_IMAGES, NUM_FEATURES)
+    found_tumors, mislab_nontumors, model = cross_val(X, y, weights)
 
-    def __getitem__(self, index):
-        return self.X[index, :], self.y[index], self.weights[index]
-
-    def __len__(self):
-        return self.len
-
-
-# CLASSIFICATION
-class NeuralNetwork(nn.Module):
-    def __init__(self):
-        super().__init__()
-        hidden_dim = 30
-
-        self.lin1 = nn.Linear(NUM_FEATURES, hidden_dim)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.lin3 = nn.Linear(hidden_dim, 1)
-
-    def forward(self, x):
-        x = self.lin1(x)
-        x = torch.nn.functional.relu(x)
-        x = self.dropout1(x)
-        x = self.lin2(x)
-        x = torch.nn.functional.relu(x)
-        x = self.dropout2(x)
-        x = self.lin3(x)
-        x = torch.nn.functional.sigmoid(x)
-        return x
-
-
-model = NeuralNetwork()
-X, y, weights = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS, NUM_IMAGES, NUM_FEATURES)
-found_tumors, mislab_nontumors = cross_val(X, y, weights)
-
-avg_found = np.mean(found_tumors)
-avg_mislbl = np.mean(mislab_nontumors)
-
-print(avg_found)
-print(avg_mislbl)
-
+    display_results(model, RESULTS_TRAIN_DIR, TRAIN_DIR, NUM_FEATURES, NUM_SEGMENTS, found_tumors, mislab_nontumors)
 
