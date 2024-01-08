@@ -1,6 +1,6 @@
 # IMPORTS
 from preprocessing import *
-#from classifier import *
+from classifier import *
 import matplotlib.pyplot as plt
 
 # SET DIRECTORIES
@@ -13,6 +13,8 @@ RESULTS_VALID_DIR = DATA_DIR+'Results/Results_Validation/'
 # GLOBAL VARIABLES
 SLICE = 95  # slice to display superpixels on
 NUM_SEGMENTS = 500  # number of segments obtained from SLIC
+NUM_IMAGES = 369
+NUM_FEATURES = 12
 VERSION = 'b'
 
 # FOR ALL IMAGES, COMPUTE SUPERPIXELS AND DESCRIPTORS
@@ -50,13 +52,55 @@ def preprocess(in_dir, out_dir):
 
 preprocess(TRAIN_DIR, RESULTS_TRAIN_DIR)
 
-#preprocess(VALID_DIR, RESULTS_VALID_DIR)
 
 # CLASSIFIER
+class Data(Dataset):
+    def __init__(self, X, y, weights):
+        assert X.shape[0] == y.shape[0] == len(weights)
+        self.len = X.shape[0]
+        self.X = torch.from_numpy(X.astype(np.float32))
+        self.y = torch.from_numpy(y.astype(np.float32))
+        self.weights = torch.from_numpy(weights.astype(np.float32))
 
-#features = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS)
+    def __getitem__(self, index):
+        return self.X[index, :], self.y[index], self.weights[index]
 
-    #inputs: means, stds, tumor_labeling
-    #output: tumor_labeling
+    def __len__(self):
+        return self.len
+
+
+# CLASSIFICATION
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super().__init__()
+        hidden_dim = 30
+
+        self.lin1 = nn.Linear(NUM_FEATURES, hidden_dim)
+        self.dropout1 = nn.Dropout(p=0.2)
+        self.lin2 = nn.Linear(hidden_dim, hidden_dim)
+        self.dropout2 = nn.Dropout(p=0.2)
+        self.lin3 = nn.Linear(hidden_dim, 1)
+
+    def forward(self, x):
+        x = self.lin1(x)
+        x = torch.nn.functional.relu(x)
+        x = self.dropout1(x)
+        x = self.lin2(x)
+        x = torch.nn.functional.relu(x)
+        x = self.dropout2(x)
+        x = self.lin3(x)
+        x = torch.nn.functional.sigmoid(x)
+        return x
+
+
+model = NeuralNetwork()
+X, y, weights = get_features(RESULTS_TRAIN_DIR, NUM_SEGMENTS, NUM_IMAGES, NUM_FEATURES)
+found_tumors, mislab_nontumors = cross_val(X, y, weights)
+
+avg_found = np.mean(found_tumors)
+avg_mislbl = np.mean(mislab_nontumors)
+
+print(avg_found)
+print(avg_mislbl)
 
 
